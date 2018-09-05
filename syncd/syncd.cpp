@@ -1693,8 +1693,6 @@ sai_status_t notifySyncd(
     }
     else if (op == SYNCD_APPLY_VIEW)
     {
-        g_asicInitViewMode = false;
-
         /*
          * TODO: Currently as WARN to be easier to spoot, later should be NOTICE.
          */
@@ -1715,17 +1713,21 @@ sai_status_t notifySyncd(
 
             local_rid_to_vid.clear();
             local_vid_to_rid.clear();
-        }
-        else
-        {
+
             /*
-             * Apply view failed. It can fail in 2 ways, eather nothing was
-             * executed, on asic, or asic is inconsistent state then we should
-             * die or hang
+             * Re-inject notifications to orchagent
              */
 
-            return status;
+            initNotifications();
         }
+
+        g_asicInitViewMode = false;
+
+        /*
+         * Apply view may failed. It can fail in 2 ways, either nothing was
+         * executed, on asic, or asic is inconsistent state then we should
+         * die or hang
+         */
     }
     else if (op == SYNCD_INSPECT_ASIC)
     {

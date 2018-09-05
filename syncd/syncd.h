@@ -106,6 +106,8 @@ bool is_set_attribute_workaround(
         _In_ sai_attr_id_t attrid,
         _In_ sai_status_t status);
 
+bool isInitViewMode();
+void initNotifications();
 void startNotificationsProcessingThread();
 void stopNotificationsProcessingThread();
 

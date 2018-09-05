@@ -89,7 +89,7 @@ void redisPutFdbEntryToAsicView(
     std::string key = ASIC_STATE_TABLE + (":" + strObjectType + ":" + strFdbEntry);
 
     if ((fdb->fdb_entry.switch_id == SAI_NULL_OBJECT_ID ||
-         fdb->fdb_entry.bv_id == SAI_NULL_OBJECT_ID) && 
+         fdb->fdb_entry.bv_id == SAI_NULL_OBJECT_ID) &&
         (fdb->event_type != SAI_FDB_EVENT_FLUSHED))
     {
         SWSS_LOG_WARN("skipped to put int db: %s", strFdbEntry.c_str());
@@ -108,7 +108,7 @@ void redisPutFdbEntryToAsicView(
         sai_object_id_t bv_id = fdb->fdb_entry.bv_id;
         sai_object_id_t port_oid = 0;
         bool port_oid_found = false;
-        
+
         for (uint32_t i = 0; i < fdb->attr_count; i++)
         {
             if(fdb->attr[i].id == SAI_FDB_ENTRY_ATTR_BRIDGE_PORT_ID)
@@ -117,13 +117,13 @@ void redisPutFdbEntryToAsicView(
                 port_oid_found = true;
             }
         }
-        
+
         if (!port_oid_found)
         {
             SWSS_LOG_ERROR("Failed to get bridge port ID for FDB entry %s",strFdbEntry.c_str());
             return;
         }
-                
+
         if (!port_oid && !bv_id)
         {
             /* we got a flush all fdb event here */
@@ -204,7 +204,7 @@ void redisPutFdbEntryToAsicView(
             }]
             */
             SWSS_LOG_ERROR("received a flush vlan fdb event, port_oid = 0x%lx, bv_id = 0x%lx, unsupported", port_oid, bv_id);
-            
+
         }
         else
         {
@@ -476,6 +476,8 @@ public:
         return ntf_queue.size();
     }
 
+    void clear();
+
 private:
     std::mutex queue_mutex;
     std::queue<swss::KeyOpFieldsValuesTuple> ntf_queue;
@@ -636,8 +638,41 @@ void on_packet_event(
     SWSS_LOG_ERROR("not implemented");
 }
 
-// determine whether notification thread is running
+void initNotifications()
+{
+    SWSS_LOG_ENTER();
 
+    sai_fdb_event_notification_data_t fdb_event;
+    fdb_event.event_type = SAI_FDB_EVENT_LEARNED;
+
+    std::string pattern = ASIC_STATE_TABLE + std::string(":SAI_OBJECT_TYPE_FDB_ENTRY:*");
+    for (const auto &key: g_redisClient->keys(pattern))
+    {
+        sai_object_id_t bridge_port_id = SAI_NULL_OBJECT_ID;
+
+        // Only process dynamic FDB.
+        auto value = g_redisClient->hget(key, "SAI_FDB_ENTRY_ATTR_TYPE");
+        if (!value || *value != "SAI_FDB_ENTRY_TYPE_DYNAMIC")
+            continue;
+
+        value = g_redisClient->hget(key, "SAI_FDB_ENTRY_ATTR_BRIDGE_PORT_ID");
+        if (!value || value->empty())
+            continue;
+
+        sai_deserialize_object_id(*value, bridge_port_id);
+        if (bridge_port_id == SAI_NULL_OBJECT_ID)
+            continue;
+
+        sai_deserialize_fdb_entry(key, fdb_event.fdb_entry);
+
+        // TOOD: optimization notification amount by batching
+        std::string s = sai_serialize_fdb_event_ntf(1, &fdb_event);
+        send_notification("fdb_event", key);
+        SWSS_LOG_INFO("FDB from ASICDB %s", s.c_str());
+    }
+}
+
+// determine whether notification thread is running
 volatile bool runThread;
 
 std::mutex ntf_mutex;
@@ -658,14 +693,19 @@ void ntf_process_function()
         // processing each notification is under same mutex as processing main
         // events, counters and reinit
 
-        swss::KeyOpFieldsValuesTuple item;
-
-        while (ntf_queue_hdlr->tryDequeue(item))
+        // Postpone any notification from ASIC during INIT VIEW stage
+        if (!isInitViewMode())
         {
-            processNotification(item);
+            swss::KeyOpFieldsValuesTuple item;
+
+            while (ntf_queue_hdlr->tryDequeue(item))
+            {
+                processNotification(item);
+            }
         }
     }
 }
+
 
 std::shared_ptr<std::thread> ntf_process_thread;
 
